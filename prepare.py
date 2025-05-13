@@ -1,6 +1,7 @@
 import pickle
 import os
 import csv
+import pandas as pd  # 添加 pandas 库
 
 def check_file(task):
     if os.path.exists('results') == False:
@@ -15,7 +16,7 @@ def check_file(task):
     if os.path.isfile(result_fine) == False:
         with open(result_fine, 'w+', newline='') as res:
             writer = csv.writer(res)
-            writer.writerow(['iteration', 'arch_code', 'ACC'])
+            writer.writerow(['iteration', 'arch_code', 'ACC', 'PPG'])
 
 def check_file_with_prefix(path, prefix):
     files = os.listdir(path)
@@ -45,7 +46,7 @@ def empty_arch(n_layers, n_qubits):
     enta = [[i] *(n_layers+1) for i in range(1,n_qubits+1)]
     return [single, enta]
 
-check_file('MNIST')
+# check_file('MNIST')
 
 def get_list_dimensions(lst):
     if isinstance(lst, list):
@@ -54,5 +55,19 @@ def get_list_dimensions(lst):
         return 1 + get_list_dimensions(lst[0])
     return 0
 
+
+def add_ppg_column(agent, csv_file):
+  
+    # 打开 CSV 文件并添加 PPG 列
+    # csv_file = 'results/QML_fine copy.csv'
+    # 读取现有的 CSV 文件
+    df = pd.read_csv(csv_file)
+    # 确保 agent.performance_per_gate 的长度与现有行数一致
+    if len(agent.performance_per_gate) != len(df):
+        raise ValueError("Length of performance_per_gate does not match the number of rows in the CSV file.")
+    # 添加 PPG 列
+    df['PPG'] = agent.performance_per_gate
+    # 保存修改后的 CSV 文件
+    df.to_csv(csv_file, index=False)
 
 

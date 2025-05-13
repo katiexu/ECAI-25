@@ -6,16 +6,20 @@ import csv
 import numpy as np
 import torch
 from Node import Node, Color
-# from schemes import Scheme
+
+from schemes import Scheme, Scheme_eval
+# from schemes_jax import Scheme, Scheme_eval
+
 import datetime
-from FusionModel import cir_to_matrix 
+# from FusionModel import translator
+# from FusionModel import cir_to_matrix
+from FusionModel_PL import translator, cir_to_matrix
 import time
-from sampling import sampling_node
 import copy
 import torch.multiprocessing as mp
 from torch.multiprocessing import Manager
 from prepare import *
-from draw import plot_2d_array
+# from draw import plot_2d_array
 from Arguments import Arguments
 import argparse
 import torch.nn as nn
@@ -70,14 +74,14 @@ class MCTS:
         self.CURT = self.ROOT
         self.weight = 'init'
         self.best_model_weight = None
-        self.explorations = {'phase': 0, 'iteration': 0, 'single':None, 'enta': None, 'rate': [0.001, 0.002, 0.002], 'rate_decay': [0.006, 0.004, 0.002, 0]}
+        self.explorations = {'phase': 0, 'iteration': 0, 'single':None, 'enta': None, 'regular': [0.001, 0.002, 0.002]}
         self.best = {'acc': 0, 'model':[]}
-        self.task = ''
+        self.task_name = ''
         self.history = [[] for i in range(2)]
         self.qubit_used = []
         self.period = 1
         self.fold = fold
-        self.failure = 0
+        self.performance_per_gate = []
 
     def init_train(self, numbers=50):
         
@@ -105,7 +109,6 @@ class MCTS:
         
         sorted_changes = [k for k, v in sorted(self.samples_compact.items(), key=lambda x: x[1], reverse=True)]
         epochs = 20
-        samples = 10
         # pick best 2 and randomly choose one
         random.seed(self.ITERATION)
         
@@ -136,14 +139,15 @@ class MCTS:
         best_arch = cir_to_matrix(single, enta, self.ARCH_CODE, args.fold)
         # plot_2d_array(arch)
         design = translator(single, enta, 'full', self.ARCH_CODE, args.fold)
-        model_weight = check_file_with_prefix('weights', 'weight_{}_'.format(self.ITERATION))
-        if model_weight:            
-            best_model, report = Scheme_eval(design, self.task, model_weight)
+        # model_weight = check_file_with_prefix('weights', 'weight_{}_'.format(self.ITERATION))
+        model_weight = False
+        if model_weight:
+            best_model, report = Scheme_eval(design, task, model_weight)
             print('Test ACC: ', report['mae'])
         else:
             if debug:
                 epochs = 1
-            best_model, report = Scheme(design, self.task, strategy, epochs)
+            best_model, report = Scheme(design, task, strategy, epochs)
             current_time = datetime.datetime.now()
             formatted_time = current_time.strftime('%m-%d-%H')
             torch.save(best_model.state_dict(), 'weights/weight_{}_{}'.format(self.ITERATION, formatted_time))
@@ -151,12 +155,12 @@ class MCTS:
         self.weight = best_model.state_dict()
         self.samples_true[json.dumps(np.int8(best_arch).tolist())] = report['mae']
 
-        with open('results/{}_fine.csv'.format(self.task), 'a+', newline='') as res:
+        with open('results/{}_fine.csv'.format(self.task_name), 'a+', newline='') as res:
             writer = csv.writer(res)
             metrics = report['mae']
             if not explicit:
                 best_change_full = best_change
-            writer.writerow([self.ITERATION, best_change_full, metrics])
+            writer.writerow([self.ITERATION, best_change_full, metrics, self.performance_per_gate[-1]])
         
         if qubits != []:
             self.history.append(qubits)
@@ -167,37 +171,47 @@ class MCTS:
         self.samples_compact = {}
         self.explorations['iteration'] += 1
         arch_last = single + enta
-        
-        with open('search_space/search_space_mnist_4', 'rb') as file:
-            self.search_space = pickle.load(file)
-        # remove last configuration
-        for i in range(len(arch_last)):
-            try:
-                self.search_space.remove(arch_last[i])
-            except ValueError:
-                pass
-        self.search_space = [x for x in self.search_space if [x[0]] not in self.qubit_used]
-        self.init_train(samples)
 
-        # implicit search
+        samples = 20
+        if args.strategy == 'mix':
+            samples = 10
+            with open('search_space/search_space_mnist_single', 'rb') as file:
+                self.search_space = pickle.load(file)
+        elif args.strategy == 'explicit':
+            with open('search_space/search_space_mnist_4', 'rb') as file:       
+                self.search_space = pickle.load(file)
         
-        self.search_space = []
-        self.qubit_used = []
-        
-        
-        self.ROOT.base_code = None        
-        self.history = [[] for i in range(2)]
-        
-        self.weight = self.weight
-        # print(Color.BLUE + 'Implicit Switch' + Color.RESET)
+        if args.strategy in ['explicit', 'mix']:
+            # remove last configuration
+            for i in range(len(arch_last)):
+                try:
+                    self.search_space.remove(arch_last[i])
+                except ValueError:
+                    pass
+            self.search_space = [x for x in self.search_space if [x[0]] not in self.qubit_used]        
+            self.init_train(samples)
 
-        arch_next = self.Langevin_update(best_arch, snr=10)
-        # imp_arch_list = self.projection(arch_next, single, enta)
-        for arch in arch_next:
-            self.search_space.append(arch)        
+        if args.strategy in ['implicit', 'mix']:    
+            # implicit search
+            
+            self.search_space = []
+            self.qubit_used = []
+            
+            
+            self.ROOT.base_code = None        
+            self.history = [[] for i in range(2)]
+            
+            self.weight = self.weight
+            # print(Color.BLUE + 'Implicit Switch' + Color.RESET)
 
-        self.init_train(samples)        
-        # self.qubit_used = qubits
+            arch_next = self.Langevin_update(best_arch, args.SNR)
+            # imp_arch_list = self.projection(arch_next, single, enta)
+            for arch in arch_next:
+                self.search_space.append(arch)        
+
+            self.init_train(samples)        
+            # self.qubit_used = qubits
+
 
     def get_grad(self, x):
         
@@ -220,23 +234,69 @@ class MCTS:
         loss.backward(retain_graph=True)
         return x, x.grad
 
+    def compute_scaling_factor(self, x, decoder, snr_target, d):
+            """
+            Compute the scaling factor c based on the given formula.
+            
+            Args:
+                x (torch.Tensor): Input tensor.
+                decoder (nn.Module): Decoder model.
+                snr_target (float): Target signal-to-noise ratio.
+                d (int): Dimensionality of the input.
+
+            Returns:
+                float: Scaling factor c.
+            """
+            # Step 1: Compute y = decoder(x)
+            x.requires_grad_(True)  # Enable gradient computation for x
+            y = decoder(x)
+            y = y[0]
+            # Step 2: Compute ||y||^2 (mean squared norm of y)
+            y_norm_squared = torch.mean(torch.norm(y, dim=-1) ** 2)
+            
+            # Step 3: Compute Jacobian J of the decoder
+            J = []
+            for i in range(y.shape[2]):  # Iterate over output dimensions
+                grad_outputs = torch.zeros_like(y)
+                grad_outputs[:, i] = 1.0  # One-hot vector for each output dimension
+                J_i = torch.autograd.grad(y, x, grad_outputs=grad_outputs, retain_graph=True, create_graph=True)[0]
+                J.append(J_i)
+            J = torch.stack(J, dim=1)  # Stack Jacobian components
+            
+            # Step 4: Compute ||J||_2^2 (Frobenius norm squared of the Jacobian)
+            J_norm_squared = torch.sum(J ** 2)
+            
+            # Step 5: Compute scaling factor c
+            x_norm = torch.norm(x.reshape(x.shape[0], -1), dim=-1).mean()
+            c = torch.sqrt(y_norm_squared / (snr_target * d * J_norm_squared)) * (x_norm / torch.sqrt(torch.tensor(d, dtype=torch.float32)))
+        
+            return c.item() 
+    
     def Langevin_update(self, x, snr=10, n_steps=20, step_size=0.01):
         
         x = self.ROOT.classifier.arch_to_z([x])
-        x_norm = torch.norm(x.reshape(x.shape[0], -1), dim=-1).mean()
         x_valid_list = []
-        for i in range(1000):            
-            noise = torch.randn_like(x)            
-            noise_norm = torch.norm(noise.reshape(noise.shape[0], -1), dim=-1).mean()
-            step_size = (x_norm / noise_norm) / snr
+
+        # Compute scaling factor c
+        decoder = self.ROOT.classifier.GVAE_model.decoder
+        d = x.shape[2]  # Dimensionality
+        c = self.compute_scaling_factor(x, decoder, snr, d)
+        
+        # x_norm_per_sample = torch.norm(x, dim=2, keepdim=True)
+
+        for i in range(1000):
+            noise = torch.randn_like(x)
+            step_size = c
             x_new = x + step_size * noise
-            x_new = self.ROOT.classifier.GVAE_model.decoder(x_new)
+            # x_new = noise * x
+            x_new = decoder(x_new)
             mask = get_proj_mask(x_new[0], arch_code[0], arch_code[0])
             if is_valid_ops_adj(x_new[0], int(arch_code[0]/self.fold)):
                 gate_matrix = x_new[0] + mask
                 single,enta, _ = generate_single_enta(gate_matrix, int(args.n_qubits/args.fold))
                 if [single, enta] not in x_valid_list:
                     x_valid_list.append([single, enta])
+        print('Number of valid ciruicts:', len(x_valid_list))
         return x_valid_list
 
     def dump_all_states(self, num_samples):
@@ -341,7 +401,7 @@ class MCTS:
                     if n.is_leaf == True:
                         sampled_arch = n.sample_arch(qubits)
                         if sampled_arch is not None:
-                            print("\nselected node" + str(n.id-7) + " in leaf layer")                            
+                            # print("\nselected node" + str(n.id-7) + " in leaf layer")                            
                             self.TASK_QUEUE.append(sampled_arch)                                
                             self.sample_nodes.append(n.id-h)
                             break
@@ -401,6 +461,7 @@ class MCTS:
         return jobs, designs, archs, nodes
 
     def evaluate_jobs_after(self, results, jobs, archs, nodes):
+        performance_per_gate = []
         for i in range(len(jobs)):
             acc = results[i]
             job = jobs[i]  
@@ -408,28 +469,26 @@ class MCTS:
             arch = archs[i]
             arch_str = json.dumps(np.int8(arch).tolist())
             
-            # self.DISPATCHED_JOB[job_str] = acc
-            # if self.task != 'MOSI':
-            #     exploration, gate_numbers = count_gates(arch, self.explorations['rate'])
-            #     print('arch:', job_str)
-            #     print('Exploration:', acc / exploration)
+            penaly, gates = count_gates(arch, self.explorations['regular'])
+            n_gates = gates['uploading'] + gates['single'] + gates['enta'] 
+            if regular == True:
+                p_acc = acc - penaly
+            else:
+                p_acc = acc                  
             
-            # p_acc = acc * (1 + 1/exploration)
-            p_acc = acc
+            performance_per_gate.append(acc/n_gates)
             self.samples[arch_str] = p_acc
             self.samples_true[arch_str] = acc
             self.samples_compact[job_str] = p_acc
             sample_node = nodes[i]
-            with open('results/{}.csv'.format(self.task), 'a+', newline='') as res:
+            print("job:", job_str, "acc:", acc, "p_acc:", p_acc)
+            with open('results/{}.csv'.format(self.task_name), 'a+', newline='') as res:
                 writer = csv.writer(res)                                        
                 num_id = len(self.samples)
                 writer.writerow([num_id, job_str, sample_node, acc, p_acc])
             self.mae_list.append(acc)
-                        
-            # if job_str in dataset and self.explorations['iteration'] == 0:
-            #     report = {'mae': dataset.get(job_str)}
-            #     # print(report)
-            # self.explorations[job_str]   = ((abs(np.subtract(self.topology[job[0]], job))) % 2.4).round().sum()
+        self.performance_per_gate.append(np.mean(performance_per_gate))
+        print('Performance per gate:', np.mean(performance_per_gate)) 
             
 
     def pre_search(self, iter):       
@@ -438,7 +497,7 @@ class MCTS:
         if self.ITERATION > 0:
             self.dump_all_states(self.sampling_num + len(self.samples))
         print("\niteration:", self.ITERATION)
-        if self.task == 'MOSI':
+        if self.task_name == 'MOSI':
             period = 5
             number = 50
         else:
@@ -517,15 +576,11 @@ class MCTS:
 
 def Scheme_mp(design, job, task, weight, i, q=None):
     step = len(design)    
-    if task != 'MOSI':
-        from schemes import Scheme
-        if get_list_dimensions(job[0]) < 3:
-            epoch = 1
-        else:
-            epoch = 2
+    if get_list_dimensions(job[0]) < 3:
+        epoch = 1
     else:
-        from schemes_mosi import Scheme
-        epoch = 3
+        epoch = 2
+   
     for j in range(step):
         print('Arch:', job[j])
         _, report = Scheme(design[j], task, weight, epoch, verbs=1)
@@ -548,7 +603,7 @@ def count_gates(arch, coeff=None):
     stat['single'] = x[[3*i+1 for i in range(layers)]].sum()
     stat['enta'] = x[[3*i+2 for i in range(layers)]].sum()
 
-    y = stat['single'] + 2 * stat['enta']
+    y = coeff[0] * stat['single'] + coeff[1] * stat['uploading'] + coeff[2] * stat['enta']
 
     return y, stat
 
@@ -580,27 +635,20 @@ def create_agent(task, arch_code, pre_file, node=None):
         print("\nresume searching,", agent.ITERATION, "iterations completed before")
         print("=====>loads:", len(agent.samples), "samples")        
         print("=====>loads:", len(agent.TASK_QUEUE), 'tasks')
-    else:
-        path = [args.file_single, args.file_enta]
-        n_qubit = args.n_qubits
-        n_layer = args.n_layers
-        n_single = int(n_qubit/2)
-        n_enta = int(n_qubit/2)
+    else:        
         
         with open('search_space/search_space_mnist_4', 'rb') as file:
             search_space = pickle.load(file)
 
-        n_qubits = arch_code[0]
+        n_qubits = int(arch_code[0] / args.fold)
         n_layers = arch_code[1]
         
-        if task == 'MNIST-10':
+        if task['task'] == 'MNIST-10':
             with open('search_space/search_space_mnist_10', 'rb') as file:
                 search_space = pickle.load(file)
-            n_qubits = 5
-        
 
         agent = MCTS(search_space, 4, args.fold, arch_code)
-        agent.task = task
+        agent.task_name = task['task']+'_'+task['option']
 
         if pre_file in init_weights:
             agent.nodes[0].classifier.model.load_state_dict(torch.load(os.path.join(init_weight_path, pre_file)), strict= True)
@@ -623,7 +671,7 @@ def create_agent(task, arch_code, pre_file, node=None):
             best_model, report = Scheme(design, task, 'init', 30, None, 'save')            
             agent.weight = best_model.state_dict()
 
-            with open('results/{}_fine.csv'.format(task), 'a+', newline='') as res:
+            with open('results/{}_fine.csv'.format(task['task']+'_'+task['option']), 'a+', newline='') as res:
                 writer = csv.writer(res)
                 writer.writerow([0, [single, enta], report['mae']]) 
         
@@ -642,41 +690,40 @@ if __name__ == '__main__':
     parser.add_argument('-pretrain', type=str, required=False, default='no_pretrain', help='filename of pretraining weights, e.g. pre_weights')
 
     args_c = parser.parse_args()
-    task = args_c.task
-    # task = 'MNIST-10'
-    # task = 'MNIST'
-    task = 'FASHION'
+    # task = args_c.task
+    
+    # task = {
+    # 'task': 'QML_Linear_32d_mix_reg',
+    # 'n_qubits': 8,
+    # 'n_layers': 4,
+    # 'fold': 2
+    # }
+
+    task = {
+    'task': 'MNIST_4',
+    'option': 'implicit_reg',
+    'n_qubits': 4,
+    'n_layers': 4,
+    'fold': 1
+    }
 
     mp.set_start_method('spawn')
 
     saved = None
     # saved = 'states/mcts_agent_20'
+    num_processes = 1
     
-    if task != 'MOSI':
-        from schemes import Scheme, Scheme_eval
-        from FusionModel import translator
-        num_processes = 2
-        if task in ['MNIST', 'FASHION']:
-            arch_code = [4, 4]  #MNIST-4
-            Range = [0.8, 0.82]
-        else:
-            arch_code = [10, 4]  # qubits, layer 
-            Range = [0.5, 0.55]
-    else:
-        from schemes_mosi import Scheme, Scheme_eval
-        from Mosi_Model import translator
-        num_processes = 1
-        arch_code = [7, 5]
+    check_file(task['task']+'_'+task['option'])
     
-    check_file(task)
-    
-    args = Arguments(task)
+    arch_code = [task['n_qubits'], task['n_layers']]
+    args = Arguments(**task)
     agent = create_agent(task, arch_code, args_c.pretrain, saved)
     ITERATION = agent.ITERATION
     debug = False
-     
+    regular = True
 
-    for iter in range(ITERATION, 50):
+
+    for iter in range(ITERATION, 30):
         jobs, designs, archs, nodes = agent.pre_search(iter)
         results = {}
         n_jobs = len(jobs)
@@ -701,9 +748,10 @@ if __name__ == '__main__':
     agent.dump_all_states(agent.sampling_num + len(agent.samples))
     # plot_2d_array(agent.best['model'])
     
-    if task != 'MOSI':
-        rank = 20        
-        print('<{}:'.format(Range[0]), sum(value < Range[0] for value in list(agent.samples_true.values())))
-        print('({}, {}):'.format(Range[0], Range[1]), sum((value in Range)  for value in list(agent.samples_true.values())))
-        print('>{}:'.format(Range[1]), sum(value > Range[1]  for value in list(agent.samples_true.values())))
-        print('Gate numbers of top {}: {}'.format(rank, analysis_result(agent.samples_true, rank)))
+    Range = [0.8, 0.82]
+    rank = 20
+
+    print('<{}:'.format(Range[0]), sum(value < Range[0] for value in list(agent.samples_true.values())))
+    print('({}, {}):'.format(Range[0], Range[1]), sum((value in Range)  for value in list(agent.samples_true.values())))
+    print('>{}:'.format(Range[1]), sum(value > Range[1]  for value in list(agent.samples_true.values())))
+    # print('Gate numbers of top {}: {}'.format(rank, analysis_result(agent.samples_true, rank)))

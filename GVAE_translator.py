@@ -2,8 +2,8 @@ import torch
 import numpy as np
 from torch.nn import functional as F
 
-from Arguments import Arguments
-args = Arguments()
+
+allowed_gates = ['Identity', 'U3', 'data', 'data+U3']
 
 def GVAE_translator(data_uploading, rot, enta, arch_code):
 
@@ -66,7 +66,7 @@ def generate_circuits(net, arch_code):
 # encode allowed gates in one-hot encoding
 def encode_gate_type():
     gate_dict = {}
-    ops = args.allowed_gates.copy()    
+    ops = allowed_gates    
     ops_len = len(ops)
     ops_index = torch.tensor(range(ops_len))
     type_onehot = F.one_hot(ops_index, num_classes=ops_len)

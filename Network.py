@@ -2,7 +2,7 @@ import torch
 import numpy as np
 from torch import nn
 from Arguments import Arguments
-args = Arguments()
+
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -105,22 +105,7 @@ class RNN(nn.Module):
         out = self.classifier(out)
         # out[:, -1] = torch.sigmoid(out[:, -1])
         return out
-
-
-class Attention(nn.Module):
-    def __init__(self, input_size, output_size):
-        super(Attention, self).__init__()
-        self.attention = nn.MultiheadAttention(input_size, 1)
-        self.classifier = nn.Linear(args.n_layers*args.n_qubits, output_size)
-
-    def forward(self, x):        #(batch, seq, feature)
-        x = x.permute(1, 0, 2)   #(seq, batch, feature)
-        out, _ = self.attention(x, x, x)
-        out = out.permute(1, 0, 2)
-        out = self.classifier(out.flatten(1))
-        # out[:, -1] = torch.sigmoid(out[:, -1])
-        return out
-
+    
 def positional_encoding(max_len, d_model):
     pos = torch.arange(max_len).unsqueeze(1)
     i = torch.arange(d_model).unsqueeze(0)

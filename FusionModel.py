@@ -5,7 +5,6 @@ import torchquantum.functional as tqf
 from math import pi
 import torch.nn.functional as F
 from torchquantum.encoding import encoder_op_list_name_dict
-from Arguments import Arguments
 import numpy as np
 
 def gen_arch(change_code, base_code):        # start from 1, not 0
@@ -154,7 +153,7 @@ class TQLayer(tq.QuantumModule):
                     enta_trainable = False
                 # single-qubit parametric gates
                 if self.design['rot' + str(layer) + str(q)] == 'U3':
-                     self.rots.append(tq.U3(has_params=True, trainable=rot_trainable,
+                    self.rots.append(tq.U3(has_params=True, trainable=rot_trainable,
                                            init_params=self.q_params_rot[q][layer]))
                 # entangled gates
                 if self.design['enta' + str(layer) + str(q)][0] == 'CU3':
@@ -171,16 +170,21 @@ class TQLayer(tq.QuantumModule):
         ]
         return input
 
-    def forward(self, x):
+    def forward(self, x, n_qubits=4, task_name=None):
         bsz = x.shape[0]
-        kernel_size = self.args.kernel
-        x = F.avg_pool2d(x, kernel_size)  # 'down_sample_kernel_size' = 6
-        if kernel_size == 4:
-            x = x.view(bsz, 6, 6)        
-            tmp = torch.cat((x.view(bsz, -1), torch.zeros(bsz, 4)), dim=-1)
-            x = tmp.reshape(bsz, -1, 10).transpose(1,2)
+        if task_name.startswith('QML'):
+            x = x.view(bsz, n_qubits, -1)
         else:
-            x = x.view(bsz, 4, 4).transpose(1,2)
+            kernel_size = self.args.kernel
+            x = F.avg_pool2d(x, kernel_size)  # 'down_sample_kernel_size' = 6
+            if kernel_size == 4:
+                x = x.view(bsz, 6, 6)
+                tmp = torch.cat((x.view(bsz, -1), torch.zeros(bsz, 4)), dim=-1)
+                x = tmp.reshape(bsz, -1, 10).transpose(1,2)
+            else:
+                x = x.view(bsz, 4, 4).transpose(1,2)
+
+
 
         qdev = tq.QuantumDevice(n_wires=self.n_wires, bsz=bsz, device=x.device)
 
@@ -198,7 +202,11 @@ class TQLayer(tq.QuantumModule):
             for j in range(self.n_wires):
                 if self.design['enta' + str(layer) + str(j)][1][0] != self.design['enta' + str(layer) + str(j)][1][1]:
                     self.entas[j + layer * self.n_wires](qdev, wires=self.design['enta' + str(layer) + str(j)][1])
-        return self.measure(qdev)
+        out = self.measure(qdev)
+        if task_name.startswith('QML'):
+            out = out[:, :2]    # only take the first two measurements for binary classification
+            
+        return out
 
 
 class QNet(nn.Module):
@@ -207,8 +215,11 @@ class QNet(nn.Module):
         self.args = arguments
         self.design = design
         self.QuantumLayer = TQLayer(self.args, self.design)
+        for name, param in self.named_parameters():
+            if "QuantumLayer" not in name:
+                param.requires_grad = False
 
-    def forward(self, x_image):
-        exp_val = self.QuantumLayer(x_image)
+    def forward(self, x_image, n_qubits, task_name):
+        exp_val = self.QuantumLayer(x_image, n_qubits, task_name)
         output = F.log_softmax(exp_val, dim=1)        
         return output

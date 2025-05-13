@@ -1,7 +1,20 @@
 import pickle
-import torch
+import torch.nn as nn
+import math
+import numpy as np
 from torch.utils.data import Dataset
 from Arguments import Arguments
+import pandas as pd
+from torch.utils.data.sampler import SequentialSampler, RandomSampler
+import torch.nn.functional as F
+
+
+# Dataloaders= lambda args: myminist_cg(args, 3,5,8)
+# Dataloaders = lambda args: myBarsAndStripes(args, 4)
+# qml_Dataloaders = lambda args: myhidden_manifold(args,6,16)
+# Dataloaders = lambda args: myhyperplanes(args, 3, 10)
+qml_Dataloaders = lambda args: mylinearly_separable(args, 32)
+# Dataloaders = lambda args: mytwo_curves(args, 20)
 
 
 class CustomDataset(Dataset):
@@ -61,8 +74,53 @@ import torch
 from torchquantum.dataset import MNIST
 
 
+def get_mnist_numpy(args, task):
+    if task in ('MNIST_4', 'MNIST_10'):
+        FASHION = False
+    else:
+        FASHION = True
+
+    dataset = MNIST(
+        root='data',
+        train_valid_split_ratio=args.train_valid_split_ratio,
+        center_crop=args.center_crop,
+        resize=args.resize,
+        resize_mode='bilinear',
+        binarize=False,
+        binarize_threshold=0.1307,
+        digits_of_interest=args.digits_of_interest,
+        n_test_samples=None,
+        n_valid_samples=None,
+        fashion=FASHION,
+        n_train_samples=None
+    )
+
+    # 提取 train/valid/test 数据并转换为 NumPy
+    def extract_numpy(split):
+        data_loader = torch.utils.data.DataLoader(
+            dataset[split],
+            batch_size=len(dataset[split]),  # 一次性加载所有数据
+            shuffle=False,
+            pin_memory=True
+        )
+        # 获取一个 batch（全部数据）
+        batch = next(iter(data_loader))
+        images, labels = batch['image'], batch['digit']
+        images = F.avg_pool2d(images,args.kernel)
+        images = images.view(images.shape[0], 4, 4).transpose(1, 2)
+        # 转换为 NumPy
+        images_np = images.numpy()  # (N, C, H, W)
+        labels_np = labels.numpy()  # (N,)
+        return images_np, labels_np
+
+    # 返回 NumPy 数据
+    train_images, train_labels = extract_numpy('train')
+    valid_images, valid_labels = extract_numpy('valid')
+    test_images, test_labels = extract_numpy('test')
+
+    return (train_images, train_labels), (valid_images, valid_labels), (test_images, test_labels)
 def MNISTDataLoaders(args, task):
-    if task in ('MNIST', 'MNIST-10'):
+    if task in ('MNIST_4', 'MNIST_10'):
         FAHION = False
     else:
         FAHION = True
@@ -98,3 +156,110 @@ def MNISTDataLoaders(args, task):
             pin_memory=True)
 
     return dataflow['train'], dataflow['valid'], dataflow['test']
+
+
+class MyDataset(Dataset):
+    def __init__(self,data,labels):
+        self.data = data
+        self.labels = labels
+    def __len__(self):
+        return len(self.labels)
+    def __getitem__(self,idx):
+        img = self.data[idx]
+        digit=self.labels[idx]
+        return {"image": img, "digit": digit}
+
+
+def reshape_to_target(tensor):
+    """
+    将 (m, 1, n) 的 Tensor 转换为 (m, 1, 16)
+    处理逻辑：
+    1. 如果 n < 16：用0填充到16
+    2. 如果 n > 16 且是完全平方数：转为2D后池化到4x4=16
+    3. 其他情况：用1D池化降到16
+    """
+    m, _, n = tensor.shape
+
+    if n == 16:
+        return tensor
+
+    # 情况1：n < 16，填充0
+    if n < 16:
+        pad_size = 16 - n
+        return torch.nn.functional.pad(tensor, (0, pad_size), mode='constant', value=0)
+    
+    if  n % 4 == 0:
+        return tensor
+
+    # 情况2：n > 16 且是完全平方数
+    sqrt_n = math.isqrt(n)
+    if sqrt_n * sqrt_n == n:
+        # 转为2D (假设可以合理reshape)
+        try:
+            # 先转为 (m, 1, sqrt_n, sqrt_n)
+            tensor_2d = tensor.view(m, 1, sqrt_n, sqrt_n)
+            # 自适应池化到 (4,4)
+            pool = nn.AdaptiveAvgPool2d((4, 4))
+            pooled = pool(tensor_2d)
+            return pooled.view(m, 1, 16)
+        except:
+            # 如果reshape失败，降级到1D池化
+            pass
+
+    # 情况3：其他情况使用1D池化
+    pool = nn.AdaptiveAvgPool1d(16)
+    return pool(tensor)
+def create_dataloader(args,train,test):
+    train_data = reshape_to_target(torch.from_numpy(train.iloc[:, :-1].values.astype(np.float32)).unsqueeze(1))
+    train_labels = torch.from_numpy(train.iloc[:, -1].values.astype(np.int64))
+    test_data = reshape_to_target(torch.from_numpy(test.iloc[:, :-1].values.astype(np.float32)).unsqueeze(1))
+    test_labels = torch.from_numpy(test.iloc[:, -1].values.astype(np.int64))
+    train_labels =torch.where(train_labels == -1, torch.tensor(0), train_labels)
+    test_labels = torch.where(test_labels == -1, torch.tensor(0),test_labels)
+    train_dateset = MyDataset(train_data, train_labels)
+    test_dateset = MyDataset(test_data, test_labels)
+    train_loader = torch.utils.data.DataLoader(
+        train_dateset,
+        batch_size=args.batch_size,
+        sampler=RandomSampler(train_dateset)
+    )
+    test_loader = torch.utils.data.DataLoader(
+        test_dateset,
+        batch_size=args.batch_size,
+        sampler=RandomSampler(test_dateset)
+    )
+    return train_loader, test_loader, test_loader
+def myBarsAndStripes(args,size):
+    train=pd.read_csv(f'benchmarks/bars_and_stripes/bars_and_stripes_{size}_x_{size}_0.5noise_train.csv',header=None)
+    test=pd.read_csv(f'benchmarks/bars_and_stripes/bars_and_stripes_{size}_x_{size}_0.5noise_test.csv',header=None)
+    return create_dataloader(args,train,test)
+def myhidden_manifold(args,manifold_dimension,n_features):
+    train=pd.read_csv(f'benchmarks/hidden_manifold/hidden_manifold-{manifold_dimension}manifold-{n_features}d_train.csv',header=None)
+    test=pd.read_csv(f'benchmarks/hidden_manifold/hidden_manifold-{manifold_dimension}manifold-{n_features}d_test.csv',header=None)
+    return create_dataloader(args,train,test)
+def myhyperplanes(args,dim_hyperplanes,n_hyperplanes):
+    train=pd.read_csv(f'benchmarks/hyperplanes_diff/hyperplanes-10d-from{dim_hyperplanes}d-{n_hyperplanes}n_train.csv',header=None)
+    test=pd.read_csv(f'benchmarks/hyperplanes_diff/hyperplanes-10d-from{dim_hyperplanes}d-{n_hyperplanes}n_test.csv',header=None)
+    return create_dataloader(args, train, test)
+def mylinearly_separable(args,n_features):
+    train=pd.read_csv(f'benchmarks/linearly_separable/linearly_separable_{n_features}d_train.csv',header=None)
+    test=pd.read_csv(f'benchmarks/linearly_separable/linearly_separable_{n_features}d_test.csv',header=None)
+    return create_dataloader(args, train, test)
+def myminist_cg(args,a,b,height):
+    train=pd.read_csv(f'benchmarks/mnist_cg/mnist_pixels_{a}-{b}_{height}x{height}_train.csv',header=None)
+    test=pd.read_csv(f'benchmarks/mnist_cg/mnist_pixels_{a}-{b}_{height}x{height}_test.csv',header=None)
+    return create_dataloader(args, train, test)
+def mytwo_curves(args,n_features):
+    train=pd.read_csv(f'benchmarks/two_curves_diff/two_curves-5degree-0.1offset-{n_features}d_train.csv',header=None)
+    test=pd.read_csv(f'benchmarks/two_curves_diff/two_curves-5degree-0.1offset-{n_features}d_test.csv',header=None)
+    return create_dataloader(args, train, test)
+
+
+
+from tqdm import tqdm
+if __name__ == '__main__':
+    trainloader, validloader, testloader = qml_Dataloaders(Arguments())
+    for feed_dict in tqdm(trainloader):
+        images = feed_dict['image'].to('cpu')
+        targets = feed_dict['digit'].to('cpu')
+        print(f'images_shape: {images.shape}, targets_shape: {targets.shape}')

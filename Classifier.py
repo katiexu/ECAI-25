@@ -6,7 +6,7 @@ import torch.nn as nn
 from torch import optim
 from torch.utils.data import DataLoader, TensorDataset
 from sklearn.metrics import accuracy_score
-from Network import Attention, FCN, normalize, FC
+from Network import FCN, FC
 from FusionModel import cir_to_matrix
 import time
 
@@ -133,7 +133,7 @@ class Classifier:
 
     def train(self):
         
-        self.epochs = 1000
+        self.epochs = 200
         
         # in a rare case, one branch has no networks
         if len(self.nets) == 0:

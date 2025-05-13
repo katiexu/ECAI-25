@@ -5,12 +5,14 @@ import torch.nn as nn
 import torch.optim as optim
 import time
 from sklearn.metrics import accuracy_score, f1_score
-from datasets import MNISTDataLoaders, MOSIDataLoaders
-from FusionModel import QNet
-from FusionModel import translator
+from datasets import MNISTDataLoaders, MOSIDataLoaders, qml_Dataloaders
+# from FusionModel import
+from FusionModel import QNet, translator
+# from FusionModel_PL import QNet, translator
 
 from Arguments import Arguments
 import random
+from tqdm import tqdm
 
 
 def get_param_num(model):
@@ -34,11 +36,11 @@ def display(metrics):
     
 def train(model, data_loader, optimizer, criterion, args):
     model.train()
-    for feed_dict in data_loader:
+    for feed_dict in tqdm(data_loader,desc='Train'):
         images = feed_dict['image'].to(args.device)
         targets = feed_dict['digit'].to(args.device)    
         optimizer.zero_grad()
-        output = model(images)
+        output = model(images, args.n_qubits, args.task)
         loss = criterion(output, targets)        
         loss.backward()
         optimizer.step()
@@ -49,10 +51,10 @@ def test(model, data_loader, criterion, args):
     target_all = torch.Tensor()
     output_all = torch.Tensor()
     with torch.no_grad():
-        for feed_dict in data_loader:
+        for feed_dict in tqdm(data_loader,desc='Test'):
             images = feed_dict['image'].to(args.device)
             targets = feed_dict['digit'].to(args.device)        
-            output = model(images)
+            output = model(images, args.n_qubits, args.task)
             instant_loss = criterion(output, targets).item()
             total_loss += instant_loss
             target_all = torch.cat((target_all, targets), dim=0)
@@ -72,10 +74,10 @@ def evaluate(model, data_loader, args):
     metrics = {}
     
     with torch.no_grad():
-        for feed_dict in data_loader:
+        for feed_dict in tqdm(data_loader,desc='Eval'):
             images = feed_dict['image'].to(args.device)
             targets = feed_dict['digit'].to(args.device)        
-            output = model(images)
+            output = model(images, args.n_qubits, args.task)
 
     _, indices = output.topk(1, dim=1)
     masks = indices.eq(targets.view(-1, 1).expand_as(indices))
@@ -88,12 +90,12 @@ def evaluate(model, data_loader, args):
 
 def Scheme_eval(design, task, weight):
     result = {}  
-    args = Arguments(task) 
+    args = Arguments(**task) 
     path = 'weights/'  
-    if task == 'MOSI':
-        dataloader = MOSIDataLoaders(args)
+    if task['task'].startswith('QML'):
+        dataloader = qml_Dataloaders(args)
     else:
-        dataloader = MNISTDataLoaders(args, task)
+        dataloader = MNISTDataLoaders(args, task['task'])
    
     train_loader, val_loader, test_loader = dataloader
     model = QNet(args, design).to(args.device)
@@ -107,23 +109,25 @@ def Scheme(design, task, weight='base', epochs=None, verbs=None, save=None):
     np.random.seed(seed)
     torch.random.manual_seed(seed)
 
-    args = Arguments(task)
-    if epochs == None:
-        epochs = args.epochs
+    args = Arguments(**task)
+    epochs = args.epochs
     
-    if task == 'MOSI':
-        dataloader = MOSIDataLoaders(args)
+    if task['task'].startswith('QML'):
+        dataloader = qml_Dataloaders(args)
     else:
-        dataloader = MNISTDataLoaders(args, task)
+        dataloader = MNISTDataLoaders(args, task['task'])
    
     train_loader, val_loader, test_loader = dataloader
     model = QNet(args, design).to(args.device)
+
+    weight = 'init'
+
     if weight != 'init':
         if weight != 'base':
             model.load_state_dict(weight, strict= False)
         else:            
             model.load_state_dict(torch.load('init_weights/base_fashion'))
-    criterion = nn.NLLLoss()   
+    criterion = nn.NLLLoss()
     optimizer = optim.Adam(model.QuantumLayer.parameters(), lr=args.qlr)
     train_loss_list, val_loss_list = [], []
     best_val_loss = 0
@@ -134,18 +138,18 @@ def Scheme(design, task, weight='base', epochs=None, verbs=None, save=None):
             train(model, train_loader, optimizer, criterion, args)
         except Exception as e:
             print('No parameter gate exists')
-        train_loss = test(model, train_loader, criterion, args)
-        train_loss_list.append(train_loss)        
-        val_loss = evaluate(model, val_loader, args)
-        val_loss_list.append(val_loss)
-        metrics = evaluate(model, test_loader, args)
-        val_loss = 0.5 *(val_loss+train_loss[-1])
-        if val_loss > best_val_loss:
-            best_val_loss = val_loss
-            if not verbs: print(epoch, train_loss, val_loss_list[-1], metrics, 'saving model')
-            best_model = copy.deepcopy(model)           
-        else:
-            if not verbs: print(epoch, train_loss, val_loss_list[-1], metrics)        
+    train_loss = test(model, train_loader, criterion, args)
+    train_loss_list.append(train_loss)
+    val_loss = evaluate(model, val_loader, args)
+    val_loss_list.append(val_loss)
+    metrics = evaluate(model, test_loader, args)
+    val_loss = 0.5 *(val_loss+train_loss[-1])
+    if val_loss > best_val_loss:
+        best_val_loss = val_loss
+        if not verbs: print( train_loss, val_loss_list[-1], metrics, 'saving model')
+        best_model = copy.deepcopy(model)
+    else:
+        if not verbs: print(train_loss, val_loss_list[-1], metrics)
     end = time.time()    
     # best_model = model
     metrics = evaluate(best_model, test_loader, args)
@@ -160,13 +164,12 @@ def Scheme(design, task, weight='base', epochs=None, verbs=None, save=None):
 
 def pretrain(design, task, weight):    
 
-    args = Arguments(task)
+    args = Arguments(**task)
     
-    if task == 'MOSI':
-        dataloader = MOSIDataLoaders(args)
+    if task['task'].startswith('QML'):
+        dataloader = qml_Dataloaders(args)
     else:
-        dataloader = MNISTDataLoaders(args, task)
-   
+        dataloader = MNISTDataLoaders(args, task['task'])   
     train_loader, val_loader, test_loader = dataloader
     model = QNet(args, design).to(args.device)
     model.load_state_dict(weight, strict= True)
@@ -197,3 +200,4 @@ if __name__ == '__main__':
     report = pretrain(design, task, weight)  
 
     # torch.save(best_model.state_dict(), 'weights/base_fashion')
+
