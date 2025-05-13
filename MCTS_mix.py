@@ -7,8 +7,8 @@ import numpy as np
 import torch
 from Node import Node, Color
 
-from schemes import Scheme, Scheme_eval
-# from schemes_jax import Scheme, Scheme_eval
+# from schemes import Scheme, Scheme_eval
+from schemes_jax import Scheme, Scheme_eval
 
 import datetime
 # from FusionModel import translator
