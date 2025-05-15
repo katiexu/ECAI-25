@@ -3,6 +3,11 @@ import numpy as np
 from sklearn.preprocessing import StandardScaler
 from sklearn.base import BaseEstimator, ClassifierMixin
 from model_utils import *
+import pickle
+from Arguments import Arguments
+args = Arguments()
+
+
 
 
 def translator(single_code, enta_code, trainable, arch_code, fold=1):
@@ -100,7 +105,7 @@ class DressedQuantumCircuitClassifier(BaseEstimator, ClassifierMixin):
         self,
         args,
         design,
-        learning_rate=0.001,
+        learning_rate=args.qlr,
         max_vmap=32,
         jit=True,
         max_steps=100000,
@@ -258,11 +263,7 @@ class DressedQuantumCircuitClassifier(BaseEstimator, ClassifierMixin):
             jnp.pi
             * jax.random.uniform(
             shape=(self.n_layers, self.n_qubits_, 3), key=self.generate_key()
-        )
-        )
-        output_weights = (
-            jax.random.normal(shape=(2, self.n_qubits_), key=self.generate_key())
-            / self.n_features_
+            )
         )
         self.params_ = {
             "rot": rot_weights,
@@ -323,3 +324,13 @@ class DressedQuantumCircuitClassifier(BaseEstimator, ClassifierMixin):
         import matplotlib.pyplot as plt
         fig, ax = qml.draw_mpl(self.circuit)(self.params_, self.example_x)
         plt.show()
+
+    # 保存参数
+    def save_params(self, filename):
+        with open(filename, 'wb') as f:
+            pickle.dump(self.params_, f)
+
+    # 加载参数
+    def load_params(self, filename):
+        with open(filename, 'rb') as f:
+            self.params_=pickle.load(f)

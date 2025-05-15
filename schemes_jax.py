@@ -49,6 +49,7 @@ def Scheme_eval(design, task, weight):
 
     train_datasets, val_datasets, test_datasets = datasets
     model = QNet(args, design)
+    model.load_params(path + weight)
     # model.load_state_dict(torch.load(path + weight), strict=False)
     result['mae'] = test(model, test_datasets)
     return model, result
@@ -87,8 +88,8 @@ def Scheme(design, task, weight='base', epochs=None, verbs=None, save=None):
     report = {'train_loss_list': train_loss_list, 'val_loss_list': val_loss_list,
               'best_val_loss': best_val_loss, 'mae': test_acc}
 
-    # if save:
-    #     torch.save(best_model.state_dict(), 'weights/init_weight')
+    if save:
+        best_model.save_params('weights/init_weight')
     return model, report
 
 
@@ -98,12 +99,13 @@ def pretrain(design, task, weight):
     datasets = get_mnist_numpy(args, task['task'])
     train_datasets, val_datasets, test_datasets = datasets
     model = QNet(args, design)
-    # model.load_state_dict(weight, strict=True)
+    model.load_params(weight)
 
     val_loss,val_acc = test(model, val_datasets)
     display(val_loss)
 
     return val_loss
+
 
 
 if __name__ == '__main__':

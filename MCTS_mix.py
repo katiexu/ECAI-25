@@ -6,15 +6,16 @@ import csv
 import numpy as np
 import torch
 from Node import Node, Color
+from sklearn.base import BaseEstimator
 
 # from schemes import Scheme, Scheme_eval
 from schemes_jax import Scheme, Scheme_eval
 
+from FusionModel import translator
 import datetime
-# from FusionModel import translator
-# from FusionModel import cir_to_matrix
-from FusionModel_PL import translator, cir_to_matrix
+from FusionModel import cir_to_matrix 
 import time
+from sampling import sampling_node
 import copy
 import torch.multiprocessing as mp
 from torch.multiprocessing import Manager
@@ -108,7 +109,7 @@ class MCTS:
         strategy = self.weight
         
         sorted_changes = [k for k, v in sorted(self.samples_compact.items(), key=lambda x: x[1], reverse=True)]
-        epochs = 20
+        epochs = 20        
         # pick best 2 and randomly choose one
         random.seed(self.ITERATION)
         
@@ -139,9 +140,8 @@ class MCTS:
         best_arch = cir_to_matrix(single, enta, self.ARCH_CODE, args.fold)
         # plot_2d_array(arch)
         design = translator(single, enta, 'full', self.ARCH_CODE, args.fold)
-        # model_weight = check_file_with_prefix('weights', 'weight_{}_'.format(self.ITERATION))
-        model_weight = False
-        if model_weight:
+        model_weight = check_file_with_prefix('weights', 'weight_{}_'.format(self.ITERATION))
+        if model_weight:            
             best_model, report = Scheme_eval(design, task, model_weight)
             print('Test ACC: ', report['mae'])
         else:
@@ -150,9 +150,12 @@ class MCTS:
             best_model, report = Scheme(design, task, strategy, epochs)
             current_time = datetime.datetime.now()
             formatted_time = current_time.strftime('%m-%d-%H')
-            torch.save(best_model.state_dict(), 'weights/weight_{}_{}'.format(self.ITERATION, formatted_time))
-
-        self.weight = best_model.state_dict()
+            if(isinstance(best_model,BaseEstimator)):
+                best_model.save_params('weights/weight_{}_{}'.format(self.ITERATION, formatted_time))
+                self.weight = best_model.params_
+            else:
+                torch.save(best_model.state_dict(), 'weights/weight_{}_{}'.format(self.ITERATION, formatted_time))
+                self.weight = best_model.state_dict()
         self.samples_true[json.dumps(np.int8(best_arch).tolist())] = report['mae']
 
         with open('results/{}_fine.csv'.format(self.task_name), 'a+', newline='') as res:
@@ -651,7 +654,10 @@ def create_agent(task, arch_code, pre_file, node=None):
         agent.task_name = task['task']+'_'+task['option']
 
         if pre_file in init_weights:
-            agent.nodes[0].classifier.model.load_state_dict(torch.load(os.path.join(init_weight_path, pre_file)), strict= True)
+            if isinstance(agent.nodes[0].classifier.model,BaseEstimator):
+                agent.nodes[0].classifier.model.load_params(os.path.join(init_weight_path, pre_file))
+            else:
+                agent.nodes[0].classifier.model.load_state_dict(torch.load(os.path.join(init_weight_path, pre_file)), strict= True)
        
         # strong entanglement
         # n_qubits = arch_code[0]
@@ -668,7 +674,7 @@ def create_agent(task, arch_code, pre_file, node=None):
         if args.init_weight in init_weights:
             agent.weight = torch.load(os.path.join(init_weight_path, args.init_weight))
         else:            
-            best_model, report = Scheme(design, task, 'init', 30, None, 'save')            
+            best_model, report = Scheme(design, task, 'init', 30, None, 'save')
             agent.weight = best_model.state_dict()
 
             with open('results/{}_fine.csv'.format(task['task']+'_'+task['option']), 'a+', newline='') as res:
@@ -711,7 +717,7 @@ if __name__ == '__main__':
 
     saved = None
     # saved = 'states/mcts_agent_20'
-    num_processes = 1
+    num_processes = 2             
     
     check_file(task['task']+'_'+task['option'])
     

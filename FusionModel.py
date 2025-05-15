@@ -153,7 +153,7 @@ class TQLayer(tq.QuantumModule):
                     enta_trainable = False
                 # single-qubit parametric gates
                 if self.design['rot' + str(layer) + str(q)] == 'U3':
-                    self.rots.append(tq.U3(has_params=True, trainable=rot_trainable,
+                     self.rots.append(tq.U3(has_params=True, trainable=rot_trainable,
                                            init_params=self.q_params_rot[q][layer]))
                 # entangled gates
                 if self.design['enta' + str(layer) + str(q)][0] == 'CU3':
@@ -184,7 +184,7 @@ class TQLayer(tq.QuantumModule):
             else:
                 x = x.view(bsz, 4, 4).transpose(1,2)
 
-
+        
 
         qdev = tq.QuantumDevice(n_wires=self.n_wires, bsz=bsz, device=x.device)
 
@@ -203,7 +203,7 @@ class TQLayer(tq.QuantumModule):
                 if self.design['enta' + str(layer) + str(j)][1][0] != self.design['enta' + str(layer) + str(j)][1][1]:
                     self.entas[j + layer * self.n_wires](qdev, wires=self.design['enta' + str(layer) + str(j)][1])
         out = self.measure(qdev)
-        if task_name.startswith('QML'):
+        if task_name.startswith('QML'):            
             out = out[:, :2]    # only take the first two measurements for binary classification
             
         return out
@@ -215,9 +215,6 @@ class QNet(nn.Module):
         self.args = arguments
         self.design = design
         self.QuantumLayer = TQLayer(self.args, self.design)
-        for name, param in self.named_parameters():
-            if "QuantumLayer" not in name:
-                param.requires_grad = False
 
     def forward(self, x_image, n_qubits, task_name):
         exp_val = self.QuantumLayer(x_image, n_qubits, task_name)

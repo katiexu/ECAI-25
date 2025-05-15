@@ -101,41 +101,41 @@ def train(
     loss_history = []
     converged = False
     start = time.time()
-    with tqdm(total=model.max_steps, desc="Training Progress") as pbar:
-        for step in range(model.max_steps):
-            key_batch = random_key_generator()
-            key_loss = jax.random.split(key_batch, 1)[0]
-            X_batch, y_batch = get_batch(X, y, key_batch, batch_size=model.batch_size)
-            params, opt_state, loss_val = update(
-                params, opt_state, X_batch, y_batch, key_loss
-            )
-            loss_history.append(loss_val)
-            logging.debug(f"{step} - loss: {loss_val}")
-            pbar.update(1)
+    # with tqdm(total=model.max_steps, desc="Training Progress") as pbar:
+    for step in range(model.max_steps):
+        key_batch = random_key_generator()
+        key_loss = jax.random.split(key_batch, 1)[0]
+        X_batch, y_batch = get_batch(X, y, key_batch, batch_size=model.batch_size)
+        params, opt_state, loss_val = update(
+            params, opt_state, X_batch, y_batch, key_loss
+        )
+        loss_history.append(loss_val)
+        logging.debug(f"{step} - loss: {loss_val}")
+        # pbar.update(1)
 
-            if np.isnan(loss_val):
-                logging.info(f"nan encountered. Training aborted.")
-                break
+        if np.isnan(loss_val):
+            logging.info(f"nan encountered. Training aborted.")
+            break
 
-            # decide convergence
-            if convergence_interval is not None:
-                if step > 2 * convergence_interval:
-                    # get means of last two intervals and standard deviation of last interval
-                    average1 = np.mean(loss_history[-convergence_interval:])
-                    average2 = np.mean(
-                        loss_history[-2 * convergence_interval : -convergence_interval]
+        # decide convergence
+        if convergence_interval is not None:
+            if step > 2 * convergence_interval:
+                # get means of last two intervals and standard deviation of last interval
+                average1 = np.mean(loss_history[-convergence_interval:])
+                average2 = np.mean(
+                    loss_history[-2 * convergence_interval : -convergence_interval]
+                )
+                std1 = np.std(loss_history[-convergence_interval:])
+                # if the difference in averages is small compared to the statistical fluctuations, stop training.
+                if (
+                    np.abs(average2 - average1)
+                    <= std1 / np.sqrt(convergence_interval) / 2
+                ):
+                    logging.info(
+                        f"Model {model.__class__.__name__} converged after {step} steps."
                     )
-                    std1 = np.std(loss_history[-convergence_interval:])
-                    # if the difference in averages is small compared to the statistical fluctuations, stop training.
-                    if (
-                        np.abs(average2 - average1)
-                        <= std1 / np.sqrt(convergence_interval) / 2
-                    ):
-                        logging.info(
-                            f"Model {model.__class__.__name__} converged after {step} steps."
-                        )
-                        converged = True
-                        break
+                    converged = True
+                    break
 
     end = time.time()
     loss_history = np.array(loss_history)

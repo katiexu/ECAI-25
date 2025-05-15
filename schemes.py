@@ -6,13 +6,11 @@ import torch.optim as optim
 import time
 from sklearn.metrics import accuracy_score, f1_score
 from datasets import MNISTDataLoaders, MOSIDataLoaders, qml_Dataloaders
-# from FusionModel import
-from FusionModel import QNet, translator
-# from FusionModel_PL import QNet, translator
+from FusionModel import QNet
+from FusionModel import translator
 
 from Arguments import Arguments
 import random
-from tqdm import tqdm
 
 
 def get_param_num(model):
@@ -36,7 +34,7 @@ def display(metrics):
     
 def train(model, data_loader, optimizer, criterion, args):
     model.train()
-    for feed_dict in tqdm(data_loader,desc='Train'):
+    for feed_dict in data_loader:
         images = feed_dict['image'].to(args.device)
         targets = feed_dict['digit'].to(args.device)    
         optimizer.zero_grad()
@@ -51,7 +49,7 @@ def test(model, data_loader, criterion, args):
     target_all = torch.Tensor()
     output_all = torch.Tensor()
     with torch.no_grad():
-        for feed_dict in tqdm(data_loader,desc='Test'):
+        for feed_dict in data_loader:
             images = feed_dict['image'].to(args.device)
             targets = feed_dict['digit'].to(args.device)        
             output = model(images, args.n_qubits, args.task)
@@ -74,7 +72,7 @@ def evaluate(model, data_loader, args):
     metrics = {}
     
     with torch.no_grad():
-        for feed_dict in tqdm(data_loader,desc='Eval'):
+        for feed_dict in data_loader:
             images = feed_dict['image'].to(args.device)
             targets = feed_dict['digit'].to(args.device)        
             output = model(images, args.n_qubits, args.task)
@@ -110,7 +108,8 @@ def Scheme(design, task, weight='base', epochs=None, verbs=None, save=None):
     torch.random.manual_seed(seed)
 
     args = Arguments(**task)
-    epochs = args.epochs
+    if epochs == None:
+        epochs = args.epochs
     
     if task['task'].startswith('QML'):
         dataloader = qml_Dataloaders(args)
@@ -119,9 +118,6 @@ def Scheme(design, task, weight='base', epochs=None, verbs=None, save=None):
    
     train_loader, val_loader, test_loader = dataloader
     model = QNet(args, design).to(args.device)
-
-    weight = 'init'
-
     if weight != 'init':
         if weight != 'base':
             model.load_state_dict(weight, strict= False)
@@ -138,18 +134,18 @@ def Scheme(design, task, weight='base', epochs=None, verbs=None, save=None):
             train(model, train_loader, optimizer, criterion, args)
         except Exception as e:
             print('No parameter gate exists')
-    train_loss = test(model, train_loader, criterion, args)
-    train_loss_list.append(train_loss)
-    val_loss = evaluate(model, val_loader, args)
-    val_loss_list.append(val_loss)
-    metrics = evaluate(model, test_loader, args)
-    val_loss = 0.5 *(val_loss+train_loss[-1])
-    if val_loss > best_val_loss:
-        best_val_loss = val_loss
-        if not verbs: print( train_loss, val_loss_list[-1], metrics, 'saving model')
-        best_model = copy.deepcopy(model)
-    else:
-        if not verbs: print(train_loss, val_loss_list[-1], metrics)
+        train_loss = test(model, train_loader, criterion, args)
+        train_loss_list.append(train_loss)        
+        val_loss = evaluate(model, val_loader, args)
+        val_loss_list.append(val_loss)
+        metrics = evaluate(model, test_loader, args)
+        val_loss = 0.5 *(val_loss+train_loss[-1])
+        if val_loss > best_val_loss:
+            best_val_loss = val_loss
+            if not verbs: print(epoch, train_loss, val_loss_list[-1], metrics, 'saving model')
+            best_model = copy.deepcopy(model)           
+        else:
+            if not verbs: print(epoch, train_loss, val_loss_list[-1], metrics)        
     end = time.time()    
     # best_model = model
     metrics = evaluate(best_model, test_loader, args)
@@ -200,4 +196,3 @@ if __name__ == '__main__':
     report = pretrain(design, task, weight)  
 
     # torch.save(best_model.state_dict(), 'weights/base_fashion')
-
