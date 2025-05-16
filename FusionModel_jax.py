@@ -8,8 +8,6 @@ from Arguments import Arguments
 args = Arguments()
 
 
-
-
 def translator(single_code, enta_code, trainable, arch_code, fold=1):
     def gen_arch(change_code, base_code):  # start from 1, not 0
         # arch_code = base_code[1:] * base_code[0]
@@ -250,6 +248,7 @@ class DressedQuantumCircuitClassifier(BaseEstimator, ClassifierMixin):
         else:
             self._loss_fn=loss_fn
         self.loss_fn = lambda X, y: self._loss_fn(self.params_, X, y)
+        self.model_train()
 
     def initialize_params(self):
         # initialise the trainable parameters
@@ -271,7 +270,7 @@ class DressedQuantumCircuitClassifier(BaseEstimator, ClassifierMixin):
             # "output_weights": output_weights,
         }
 
-    def fit(self, X,y,epochs):
+    def fit(self, X,y,epochs=1):
         """Fit the model to data X and labels y.
 
         Args:
@@ -283,7 +282,8 @@ class DressedQuantumCircuitClassifier(BaseEstimator, ClassifierMixin):
         self.max_steps=X.shape[0]*epochs//self.batch_size
         self.params_ = train(
             self,
-            self._loss_fn,
+            self.chunked_loss_fn,
+            self.chunked_grad_fn,
             optimizer,
             X,
             y,
@@ -334,3 +334,24 @@ class DressedQuantumCircuitClassifier(BaseEstimator, ClassifierMixin):
     def load_params(self, filename):
         with open(filename, 'rb') as f:
             self.params_=pickle.load(f)
+
+    def model_train(self):
+        # wrap a key around the function if it doesn't have one
+        if "key" not in inspect.signature(self._loss_fn).parameters:
+            def loss_fn_wrapped(params, x, y, key):
+                return self._loss_fn(params, x, y)
+
+        else:
+            loss_fn_wrapped = self._loss_fn
+        grad_fn = jax.grad(loss_fn_wrapped)
+        if self.jit:
+            grad_fn = jax.jit(grad_fn)
+        self.chunked_grad_fn = (
+            chunk_grad(grad_fn, self.max_vmap) if self.max_vmap is not None else grad_fn
+        )
+        self.chunked_loss_fn = (
+            chunk_loss(loss_fn_wrapped, self.max_vmap)
+            if self.max_vmap is not None
+            else loss_fn_wrapped
+        )
+

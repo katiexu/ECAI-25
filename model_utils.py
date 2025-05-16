@@ -29,7 +29,7 @@ from tqdm import tqdm
 
 
 def train(
-    model, loss_fn, optimizer, X, y, random_key_generator, convergence_interval=200
+    model, chunked_loss_fn, chunked_grad_fn, optimizer, X, y, random_key_generator, convergence_interval=200
 ):
     """
     Trains a model using an optimizer and a loss function via gradient descent. We assume that the loss function
@@ -61,35 +61,15 @@ def train(
         if not model.batch_size / model.max_vmap % 1 == 0:
             raise Exception("Batch size must be multiple of max_vmap.")
 
-    # wrap a key around the function if it doesn't have one
-    if "key" not in inspect.signature(loss_fn).parameters:
-
-        def loss_fn_wrapped(params, x, y, key):
-            return loss_fn(params, x, y)
-
-    else:
-        loss_fn_wrapped = loss_fn
 
     params = model.params_
     opt = optimizer(learning_rate=model.learning_rate)
     opt_state = opt.init(params)
-    grad_fn = jax.grad(loss_fn_wrapped)
 
-    # jitting through the chunked_grad function can take a long time,
-    # so we jit here and chunk after
-    if model.jit:
-        grad_fn = jax.jit(grad_fn)
 
     # note: assumes that the loss function is a sample mean of
     # some function over the input data set
-    chunked_grad_fn = (
-        chunk_grad(grad_fn, model.max_vmap) if model.max_vmap is not None else grad_fn
-    )
-    chunked_loss_fn = (
-        chunk_loss(loss_fn_wrapped, model.max_vmap)
-        if model.max_vmap is not None
-        else loss_fn_wrapped
-    )
+
 
     def update(params, opt_state, x, y, key):
         grads = chunked_grad_fn(params, x, y, key)
